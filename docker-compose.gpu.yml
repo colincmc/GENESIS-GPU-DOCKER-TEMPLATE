@@ -1,0 +1,134 @@
+# ── GENESIS GPU OVERLAY ─────────────────────────────────────────────
+# docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+#
+# This overlay adds GPU-accelerated services alongside the CPU stack.
+# Spine Heartbeat monitors GPU health — auto-fallback if GPU dies.
+#
+# TIER 1 (g4dn.xlarge, T4, ~£50/month):
+#   - genesis-gpu-rapids-worker: cuML anomaly detection + cuDF Parquet loading
+#
+# TIER 2 (g5.xlarge, A10G, ~£200/month):
+#   - genesis-gpu-nemo-worker: NeMo Guardrails + Triton inference
+#
+# TIER 3 (g5.2xlarge+, ~£400/month):
+#   - genesis-gpu-full-worker: Warp simulation + Morpheus + cuOpt routing
+# ────────────────────────────────────────────────────────────────────
+
+version: "3.8"
+
+services:
+
+  # ── TIER 1: RAPIDS Worker (T4 GPU) ─────────────────────────────
+
+  genesis-gpu-rapids-worker:
+    build:
+      context: ./repos/GENESIS-GPU-DOCKER-TEMPLATE
+      dockerfile: Dockerfile.gpu-rapids
+    container_name: genesis-gpu-rapids-worker
+    ports:
+      - "8790:8790"
+    environment:
+      - PORT=8790
+      - BRIGHTON_URL=http://genesis-brighton-protocol:8670
+      - BRIGHTON_GPU_INTERFACE_URL=http://genesis-brighton-gpu-interface:8786
+      - WHITEBOARD_URL=http://genesis-whiteboard:8710
+      - GTC_URL=http://genesis-beachhead-gtc:8650
+      - PARQUET_DIR=/parquet-data
+      - SPINE_HEARTBEAT_URL=http://genesis-spine-heartbeat:8785
+      - WORKER_MODE=rapids
+    volumes:
+      - parquet_exports:/parquet-data:ro
+    networks:
+      - rail1_shared_network
+      - gpu_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - genesis-brighton-gpu-interface
+      - genesis-spine-heartbeat
+    restart: unless-stopped
+
+  # ── TIER 2: NeMo Worker (A10G GPU) ────────────────────────────
+
+  genesis-gpu-nemo-worker:
+    build:
+      context: ./repos/GENESIS-GPU-DOCKER-TEMPLATE
+      dockerfile: Dockerfile.gpu-nemo
+    container_name: genesis-gpu-nemo-worker
+    ports:
+      - "8791:8791"
+    environment:
+      - PORT=8791
+      - IRON_HALO_URL=http://genesis-iron-halo:8680
+      - WHITEBOARD_URL=http://genesis-whiteboard:8710
+      - ACADEMY_URL=http://genesis-academy:8730
+      - GUARDRAILS_CONFIG_DIR=/app/guardrails
+      - SPINE_HEARTBEAT_URL=http://genesis-spine-heartbeat:8785
+      - WORKER_MODE=nemo
+    volumes:
+      - nemo_guardrails_config:/app/guardrails:ro
+    networks:
+      - rail1_shared_network
+      - gpu_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - genesis-spine-heartbeat
+    restart: unless-stopped
+
+  # ── TIER 3: Full Spine Worker (A10G+) ─────────────────────────
+
+  genesis-gpu-full-worker:
+    build:
+      context: ./repos/GENESIS-GPU-DOCKER-TEMPLATE
+      dockerfile: Dockerfile.gpu-full
+    container_name: genesis-gpu-full-worker
+    ports:
+      - "8792:8792"
+    environment:
+      - PORT=8792
+      - BRIGHTON_URL=http://genesis-brighton-protocol:8670
+      - BRIGHTON_GPU_INTERFACE_URL=http://genesis-brighton-gpu-interface:8786
+      - WHITEBOARD_URL=http://genesis-whiteboard:8710
+      - IRON_HALO_URL=http://genesis-iron-halo:8680
+      - ACADEMY_URL=http://genesis-academy:8730
+      - GTC_URL=http://genesis-beachhead-gtc:8650
+      - GUARDRAILS_CONFIG_DIR=/app/guardrails
+      - SPINE_HEARTBEAT_URL=http://genesis-spine-heartbeat:8785
+      - PARQUET_DIR=/parquet-data
+      - WORKER_MODE=full
+    volumes:
+      - parquet_exports:/parquet-data:ro
+      - nemo_guardrails_config:/app/guardrails:ro
+    networks:
+      - rail1_shared_network
+      - gpu_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - genesis-brighton-gpu-interface
+      - genesis-spine-heartbeat
+    restart: unless-stopped
+
+networks:
+  gpu_network:
+    driver: bridge
+    internal: true
+
+volumes:
+  nemo_guardrails_config:

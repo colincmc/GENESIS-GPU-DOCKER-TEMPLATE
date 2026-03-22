@@ -1,0 +1,96 @@
+# ── GENESIS GPU FULL SPINE IMAGE ────────────────────────────────────
+# Tier 4: Everything — RAPIDS + NeMo + Warp + Morpheus + cuOpt
+# Target: g5.2xlarge+ (A10G) or p3 instances
+# Usage:  docker build -f Dockerfile.gpu-full -t genesis-gpu-full .
+#
+# Full Spine acceleration targets:
+#   Warp       — Pre-flight microsimulation (order book physics)
+#   Morpheus   — Adversary digital fingerprinting
+#   cuOpt      — Multi-chain route optimisation
+#   NVComp     — Telemetry compression (5-10x)
+#   + All Tier 2 + Tier 3 capabilities
+# ────────────────────────────────────────────────────────────────────
+
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+
+LABEL maintainer="Genesis Capital — Commander"
+LABEL description="Genesis GPU Full Spine — RAPIDS + NeMo + Warp + Morpheus + cuOpt + Node 20"
+LABEL tier="4-full-spine"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV RAPIDS_VERSION=24.12
+
+# ── System deps (devel image for Warp compilation) ──────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3-pip \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Node.js 20 LTS ──────────────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g npm@latest
+
+# ── Python aliases ───────────────────────────────────────────────
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# ── RAPIDS suite ─────────────────────────────────────────────────
+RUN pip3 install --no-cache-dir \
+    --extra-index-url https://pypi.nvidia.com \
+    cudf-cu12 \
+    cuml-cu12 \
+    cugraph-cu12 \
+    numpy>=1.26 \
+    httpx>=0.27 \
+    pyarrow>=14.0
+
+# ── NeMo Guardrails ─────────────────────────────────────────────
+RUN pip3 install --no-cache-dir \
+    nemoguardrails>=0.10
+
+# ── TensorRT + Triton ───────────────────────────────────────────
+RUN pip3 install --no-cache-dir \
+    --extra-index-url https://pypi.nvidia.com \
+    tensorrt>=10.0 \
+    tensorrt-dispatch>=10.0 \
+    tensorrt-lean>=10.0 \
+    tritonclient[all]>=2.44
+
+# ── NVIDIA Warp (physics simulation) ────────────────────────────
+RUN pip3 install --no-cache-dir \
+    nvidia-warp>=1.3
+
+# ── NVIDIA Morpheus (digital fingerprinting) ────────────────────
+RUN pip3 install --no-cache-dir \
+    morpheus-mlflow>=24.10
+
+# ── NVIDIA cuOpt (route optimisation) ──────────────────────────
+RUN pip3 install --no-cache-dir \
+    --extra-index-url https://pypi.nvidia.com \
+    nvidia-cuopt-cu12 || echo "cuOpt not available via pip — will use container"
+
+# ── NVIDIA NVComp (compression) ─────────────────────────────────
+RUN pip3 install --no-cache-dir \
+    --extra-index-url https://pypi.nvidia.com \
+    pynvcomp || echo "NVComp python bindings — fallback to C API"
+
+# ── Working directory ────────────────────────────────────────────
+WORKDIR /app
+
+VOLUME ["/app/guardrails"]
+ENV GUARDRAILS_CONFIG_DIR=/app/guardrails
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD node -e "fetch('http://localhost:' + (process.env.PORT || 8800) + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+CMD ["node", "dist/index.js"]

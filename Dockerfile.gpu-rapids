@@ -1,0 +1,59 @@
+# ── GENESIS GPU RAPIDS IMAGE ────────────────────────────────────────
+# Tier 2: RAPIDS cuML + cuGraph + cuDF on top of base
+# Target: g4dn.xlarge (T4) or g5.xlarge (A10G)
+# Usage:  docker build -f Dockerfile.gpu-rapids -t genesis-gpu-rapids .
+#
+# RAPIDS acceleration targets:
+#   cuML   — Brighton anomaly detection (1000x faster), clustering
+#   cuGraph — Exchange PageRank, adversary network mapping
+#   cuDF   — Columnar data loading (Parquet → GPU memory in ms)
+# ────────────────────────────────────────────────────────────────────
+
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+LABEL maintainer="Genesis Capital — Commander"
+LABEL description="Genesis GPU RAPIDS image — cuML + cuGraph + cuDF + Node 20"
+LABEL tier="2-rapids"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV RAPIDS_VERSION=24.12
+
+# ── System deps ──────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    python3.11 \
+    python3.11-venv \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Node.js 20 LTS ──────────────────────────────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g npm@latest
+
+# ── Python aliases ───────────────────────────────────────────────
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# ── RAPIDS suite (cuDF, cuML, cuGraph) ──────────────────────────
+# Install via pip — lighter than conda, GPU-only packages
+RUN pip3 install --no-cache-dir \
+    --extra-index-url https://pypi.nvidia.com \
+    cudf-cu12 \
+    cuml-cu12 \
+    cugraph-cu12 \
+    numpy>=1.26 \
+    httpx>=0.27 \
+    pyarrow>=14.0
+
+# ── Working directory ────────────────────────────────────────────
+WORKDIR /app
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD node -e "fetch('http://localhost:' + (process.env.PORT || 8800) + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
+CMD ["node", "dist/index.js"]
